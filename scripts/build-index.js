@@ -1,7 +1,9 @@
 /**
- * build-index.js — Read Google Drive folder and generate index.html with Drive links
+ * build-index.js — Download HTML files from Google Drive and generate index page
  *
- * Produces: output/index.html (single page with card links to Drive files)
+ * Produces:
+ *   output/index.html          — Index page with card links
+ *   output/files/{filename}    — Downloaded HTML files (served directly)
  */
 
 const { google } = require('googleapis');
@@ -10,6 +12,7 @@ const path = require('path');
 
 const FOLDER_ID = '1rK3Eq8LH2Sg9YRBUcPA6PzQhDzVckLCq';
 const OUTPUT_DIR = path.resolve(__dirname, '..', 'output');
+const FILES_DIR = path.join(OUTPUT_DIR, 'files');
 
 // ─── Drive Auth ──────────────────────────────────────────────
 async function getDriveClient() {
@@ -50,12 +53,19 @@ async function listHtmlFiles(drive) {
   return files;
 }
 
+// ─── Download file ───────────────────────────────────────────
+async function downloadFile(drive, fileId, destPath) {
+  const res = await drive.files.get(
+    { fileId, alt: 'media' },
+    { responseType: 'arraybuffer' }
+  );
+  fs.writeFileSync(destPath, Buffer.from(res.data));
+}
+
 // ─── Parse display name from filename ────────────────────────
 function parseDisplayName(filename) {
   let name = filename.replace(/\.html$/i, '');
-  // Remove version suffixes
   name = name.replace(/[-_]*(v\d+(\.\d+)?|完整版|美化版|full|校準版|拷貝)[-_]*/gi, '');
-  // Clean up separators
   name = name.replace(/[-_]+/g, ' ').trim();
   return name || filename;
 }
@@ -71,9 +81,15 @@ function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// ─── Safe filename (URL-friendly) ────────────────────────────
+function safeFilename(name) {
+  return name
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/\s+/g, '-');
+}
+
 // ─── Generate HTML ───────────────────────────────────────────
 function generateIndex(files) {
-  // Sort by modified time (newest first)
   const sorted = [...files].sort((a, b) =>
     new Date(b.modifiedTime) - new Date(a.modifiedTime)
   );
@@ -82,10 +98,11 @@ function generateIndex(files) {
     const displayName = parseDisplayName(file.name);
     const date = formatDate(file.modifiedTime);
     const sizeKB = Math.round(parseInt(file.size || '0', 10) / 1024);
-    const href = `https://drive.google.com/file/d/${file.id}/view`;
+    const localFile = safeFilename(file.name);
+    const href = `files/${encodeURIComponent(localFile)}`;
 
     return `
-    <a href="${esc(href)}" target="_blank" rel="noopener" class="card-hover block rounded-xl overflow-hidden bg-white shadow-sm">
+    <a href="${href}" class="card-hover block rounded-xl overflow-hidden bg-white shadow-sm">
       <div class="p-5">
         <div class="flex items-start gap-3">
           <span class="material-symbols-outlined mt-0.5 shrink-0" style="color:var(--primary);font-size:1.3rem">description</span>
@@ -150,7 +167,7 @@ body{background:radial-gradient(ellipse at top left,#F0F2F5 0%,#E0E5EB 50%,#E8E0
 ${cards}
   </div>
 </main>
-<footer style="background:var(--bg-wash-1)" class="border-t py-8 mt-8" style="border-color:var(--outline-variant)">
+<footer style="background:var(--bg-wash-1)" class="border-t py-8 mt-8">
   <div class="max-w-4xl mx-auto flex flex-col items-center gap-2 px-6 text-center">
     <p class="font-headline italic text-lg" style="color:var(--primary)">宜蘭慈心華德福實驗學校</p>
     <p class="text-xs tracking-widest uppercase" style="color:var(--secondary)">Powered by TeacherOS</p>
@@ -169,12 +186,23 @@ async function main() {
   const files = await listHtmlFiles(drive);
   console.log(`Found ${files.length} files`);
 
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  fs.mkdirSync(FILES_DIR, { recursive: true });
 
+  // Download all HTML files
+  for (const file of files) {
+    const localName = safeFilename(file.name);
+    const destPath = path.join(FILES_DIR, localName);
+    const sizeMB = (parseInt(file.size || '0', 10) / 1024 / 1024).toFixed(1);
+    console.log(`  Downloading: ${file.name} (${sizeMB} MB)...`);
+    await downloadFile(drive, file.id, destPath);
+  }
+
+  // Generate index
   const html = generateIndex(files);
   const outPath = path.join(OUTPUT_DIR, 'index.html');
   fs.writeFileSync(outPath, html);
-  console.log(`Generated: ${outPath} (${(Buffer.byteLength(html) / 1024).toFixed(1)} KB)`);
+  console.log(`\nGenerated: index.html (${(Buffer.byteLength(html) / 1024).toFixed(1)} KB)`);
+  console.log(`Total: ${files.length} files downloaded to output/files/`);
 }
 
 main().catch(err => {
