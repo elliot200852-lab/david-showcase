@@ -1,0 +1,12 @@
+{
+  "name": "david-showcase",
+  "version": "1.0.0",
+  "description": "David素材展示——華德福教學素材公開展示",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-index.js"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0"
+  }
+}
