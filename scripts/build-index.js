@@ -1,24 +1,32 @@
 /**
- * build-index.js — Download HTML files from Google Drive (with subfolder support)
- *                  and generate a folder-organised index page.
+ * build-index.js — Cloud Design 版部署管線
  *
- * Drive layout expected:
- *   ROOT_FOLDER/
- *     01_9C英文課程/    ← subfolders
- *     02_9C走讀台南/
- *     …
- *
- * Output:
- *   output/index.html                    ← index with per-folder sections
- *   output/files/{folderSlug}/{file}     ← downloaded HTML files
+ * 流程：
+ *   1. 載入 site/data.js（curated 中繼資料：每分類的 id/title/subtitle/note/accent + 每檔 desc）
+ *   2. 掃描 Drive ROOT_FOLDER 下所有 NN_* 子資料夾與其 HTML 檔案
+ *   3. Merge：以 Drive 為實際真相，補上 modifiedTime → date、size → size
+ *      - 既有條目：更新 date / size
+ *      - Drive 新增檔案：自動加入（auto-parsed title + 空 desc，待後補）
+ *      - data.js 有但 Drive 沒有：保留並在 build-report 提示
+ *      - Drive 新資料夾未在 data.js：跳過（需先手動建中繼資料）
+ *   4. 下載 HTML 檔到 output/files/<folder>/<file>
+ *   5. 輸出：
+ *        output/index.html      ← 自 site/ 複製
+ *        output/category.html   ← 自 site/ 複製
+ *        output/styles.css      ← 自 site/ 複製
+ *        output/data.js         ← merged 結果
+ *        output/build-report.md ← 同步差異報告
  */
 
 const { google } = require('googleapis');
 const fs   = require('fs');
 const path = require('path');
+const vm   = require('vm');
 
 const ROOT_FOLDER_ID = '1rK3Eq8LH2Sg9YRBUcPA6PzQhDzVckLCq';
-const OUTPUT_DIR     = path.resolve(__dirname, '..', 'output');
+const REPO_ROOT      = path.resolve(__dirname, '..');
+const SITE_DIR       = path.join(REPO_ROOT, 'site');
+const OUTPUT_DIR     = path.join(REPO_ROOT, 'output');
 const FILES_DIR      = path.join(OUTPUT_DIR, 'files');
 
 // ─── Auth ────────────────────────────────────────────────────
@@ -27,7 +35,7 @@ async function getDriveClient() {
   if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
     credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
   } else {
-    const keyPath = path.join(__dirname, '..', 'service-account-key.json');
+    const keyPath = path.join(REPO_ROOT, 'service-account-key.json');
     if (!fs.existsSync(keyPath)) {
       console.error('No service account key. Set GOOGLE_SERVICE_ACCOUNT_KEY or provide service-account-key.json');
       process.exit(1);
@@ -41,18 +49,17 @@ async function getDriveClient() {
   return google.drive({ version: 'v3', auth });
 }
 
-// ─── List subfolders ─────────────────────────────────────────
+// ─── Drive listing ──────────────────────────────────────────
 async function listSubfolders(drive, parentId) {
   const res = await drive.files.list({
     q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     fields: 'files(id, name)',
     orderBy: 'name',
-    pageSize: 50,
+    pageSize: 100,
   });
   return res.data.files || [];
 }
 
-// ─── List HTML files in a folder ─────────────────────────────
 async function listHtmlFiles(drive, folderId) {
   const files = [];
   let pageToken = null;
@@ -70,7 +77,6 @@ async function listHtmlFiles(drive, folderId) {
   return files;
 }
 
-// ─── Download ────────────────────────────────────────────────
 async function downloadFile(drive, fileId, destPath) {
   const res = await drive.files.get(
     { fileId, alt: 'media' },
@@ -80,206 +86,247 @@ async function downloadFile(drive, fileId, destPath) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
-function safeFilename(name) {
-  return name.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, '-');
+function formatDate(iso) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
-// Strip numbering prefix: "01_9C英文課程" → "9C英文課程"
-function folderDisplayName(raw) {
-  return raw.replace(/^\d+[_\-\s]+/, '');
+function formatSize(bytes) {
+  const n = parseInt(bytes || '0', 10);
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return Math.round(n / 1024) + ' KB';
 }
 
-function parseDisplayName(filename) {
+// 由檔名 fallback 出標題：去 .html、去 V1/拷貝/校準版 等贅字、底線/連字號轉空白
+function parseTitleFromFilename(filename) {
   let name = filename.replace(/\.html$/i, '');
   name = name.replace(/[-_]*(v\d+(\.\d+)?|完整版|美化版|full|校準版|拷貝)[-_]*/gi, '');
   name = name.replace(/[-_]+/g, ' ').trim();
   return name || filename;
 }
 
-function formatDate(iso) {
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+// 載入 site/data.js 並取出 META / CATEGORIES / BASE_URL
+// 注意：vm context 不暴露 const 宣告，所以在跑完後手動把變數推進 globalThis
+function loadCuratedData() {
+  const code = fs.readFileSync(path.join(SITE_DIR, 'data.js'), 'utf8');
+  // 抽掉檔尾的 window.DATA expose 與 urlFor（Node 沒有 window，function 我們自己重寫）
+  const stripped = code.replace(/window\.DATA\s*=[\s\S]*$/, '');
+  // 在 vm 內用 globalThis.X = X 把 const 變數推出來
+  const exposeTail = `\n;Object.assign(globalThis, { META, CATEGORIES, BASE_URL });`;
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(stripped + exposeTail, sandbox);
+  return {
+    META: sandbox.META,
+    CATEGORIES: sandbox.CATEGORIES,
+    BASE_URL: sandbox.BASE_URL,
+  };
 }
 
-function esc(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+// ─── Merge curated + drive ──────────────────────────────────
+function mergeData(curated, driveData) {
+  const report = { newFiles: [], missingFiles: [], unknownFolders: [], updatedFiles: 0 };
 
-const FOLDER_ICONS = {
-  '9C英文': 'menu_book',
-  '走讀':   'map',
-  '歷史':   'history_edu',
-  '五年級': 'eco',
-  '台灣的故事': 'auto_stories',
-  '工作坊': 'build',
-  'TeacherOS': 'settings',
-  '3A':     'calculate',
-};
-
-function folderIcon(displayName) {
-  for (const [key, icon] of Object.entries(FOLDER_ICONS)) {
-    if (displayName.includes(key)) return icon;
+  // 建 folder → curatedCategory 映射
+  const curatedByFolder = new Map();
+  for (const cat of curated.CATEGORIES) {
+    curatedByFolder.set(cat.folder, cat);
   }
-  return 'folder_open';
+
+  // 建 folder → driveFiles 映射
+  const driveByFolder = new Map();
+  for (const f of driveData) {
+    driveByFolder.set(f.name, f.files);
+  }
+
+  // 遍歷 curated categories，更新每個 item 的 date/size
+  for (const cat of curated.CATEGORIES) {
+    const driveFiles = driveByFolder.get(cat.folder);
+    if (!driveFiles) {
+      // 整個 folder 在 Drive 沒了
+      cat.items.forEach(it => report.missingFiles.push(`${cat.folder}/${it.file}`));
+      continue;
+    }
+    const driveByName = new Map(driveFiles.map(f => [f.name, f]));
+
+    // 更新既有條目
+    for (const item of cat.items) {
+      const df = driveByName.get(item.file);
+      if (df) {
+        item.date = formatDate(df.modifiedTime);
+        item.size = formatSize(df.size);
+        report.updatedFiles++;
+        driveByName.delete(item.file); // 標記已處理
+      } else {
+        report.missingFiles.push(`${cat.folder}/${item.file}`);
+      }
+    }
+
+    // 剩下的就是 Drive 新增、data.js 還沒寫入的檔案
+    for (const [name, df] of driveByName) {
+      const newItem = {
+        title: parseTitleFromFilename(name),
+        date: formatDate(df.modifiedTime),
+        size: formatSize(df.size),
+        desc: '（待補：請至 site/data.js 為此檔案補上一句敘述）',
+        file: name,
+      };
+      cat.items.push(newItem);
+      report.newFiles.push(`${cat.folder}/${name}`);
+    }
+  }
+
+  // 找出 Drive 有、curated 沒有的整個資料夾
+  for (const f of driveData) {
+    if (!curatedByFolder.has(f.name) && f.files.length > 0) {
+      report.unknownFolders.push(f.name);
+    }
+  }
+
+  return { curated, report };
 }
 
-// ─── HTML generation ─────────────────────────────────────────
-function generateIndex(sections) {
-  const totalFiles = sections.reduce((s, f) => s + f.files.length, 0);
-  const now = new Date().toISOString().split('T')[0];
+// ─── Output writers ─────────────────────────────────────────
+function writeDataJs(curated) {
+  const out = `// David 素材展示 · 資料層（由 scripts/build-index.js 自動生成）
+// curated 中繼資料在 site/data.js；Drive 上的 date/size 由 build 同步寫入
+// 新增檔案會自動帶入（title 由檔名 parse、desc 留空待補）
 
-  const navItems = sections.map(sec =>
-    `<a href="#${sec.slug}" class="nav-chip font-label text-xs px-3 py-1.5 rounded-full transition-colors" style="background:rgba(255,255,255,0.15);color:rgba(255,255,255,0.85)">${esc(sec.displayName)}</a>`
-  ).join('\n        ');
+const BASE_URL = ${JSON.stringify(curated.BASE_URL)};
 
-  const folderSections = sections.map(sec => {
-    const icon = folderIcon(sec.displayName);
-    const cards = sec.files.map(file => {
-      const displayName = parseDisplayName(file.name);
-      const date = formatDate(file.modifiedTime);
-      const sizeKB = Math.round(parseInt(file.size || '0', 10) / 1024);
-      const localFile = safeFilename(file.name);
-      const href = `files/${encodeURIComponent(sec.slug)}/${encodeURIComponent(localFile)}`;
-      return `
-        <a href="${href}" class="card-hover block rounded-xl overflow-hidden bg-white shadow-sm">
-          <div class="p-5">
-            <div class="flex items-start gap-3">
-              <span class="material-symbols-outlined mt-0.5 shrink-0" style="color:var(--primary);font-size:1.3rem">description</span>
-              <div class="min-w-0 flex-1">
-                <h3 class="font-headline text-base font-bold leading-snug mb-1.5" style="color:var(--on-surface)">${esc(displayName)}</h3>
-                <div class="flex items-center gap-3 text-xs" style="color:var(--on-surface-variant)">
-                  <span class="flex items-center gap-1"><span class="material-symbols-outlined" style="font-size:0.9rem">schedule</span>${date}</span>
-                  <span>${sizeKB} KB</span>
-                </div>
-              </div>
-              <span class="material-symbols-outlined ml-auto shrink-0" style="color:var(--outline-variant);font-size:1.2rem">open_in_new</span>
-            </div>
-          </div>
-        </a>`;
-    }).join('\n');
+const META = ${JSON.stringify(curated.META, null, 2)};
 
-    return `
-  <section id="${sec.slug}" class="mb-12">
-    <div class="flex items-center gap-3 mb-5 pb-3" style="border-bottom:2px solid var(--bg-wash-2)">
-      <span class="material-symbols-outlined" style="color:var(--primary);font-size:1.6rem">${icon}</span>
-      <h2 class="font-headline text-xl font-bold" style="color:var(--on-surface)">${esc(sec.displayName)}</h2>
-      <span class="ml-auto text-xs font-label px-2 py-0.5 rounded-full" style="background:var(--bg-wash-2);color:var(--on-surface-variant)">${sec.files.length} 件</span>
-    </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-${cards}
-    </div>
-  </section>`;
-  }).join('\n');
+const CATEGORIES = ${JSON.stringify(curated.CATEGORIES, null, 2)};
 
-  return `<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-<meta charset="utf-8"/>
-<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Plus+Jakarta+Sans:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<script>
-tailwind.config={theme:{extend:{fontFamily:{
-  "headline":["Playfair Display","Noto Serif TC","Georgia","serif"],
-  "body":["Plus Jakarta Sans","Noto Sans TC","PingFang TC","Microsoft JhengHei","sans-serif"],
-  "label":["Plus Jakarta Sans","Noto Sans TC","sans-serif"]
-}}}}
-</script>
-<title>David 素材展示</title>
-<style>
-:root{--primary:#5E6B7F;--secondary:#7B6B60;--bg-wash-1:#F0F2F5;--bg-wash-2:#E0E5EB;--on-surface:#1C1E22;--on-surface-variant:#44484F;--outline-variant:#C4C8D0}
-body{background:radial-gradient(ellipse at top left,#F0F2F5 0%,#E0E5EB 50%,#E8E0F0 100%);min-height:100vh}
-.watercolor-wash-header{mask-image:url("data:image/svg+xml;utf8,<svg viewBox='0 0 100 100' preserveAspectRatio='none' xmlns='http://www.w3.org/2000/svg'><path d='M0,0 C20,10 40,-5 60,5 C80,15 100,0 100,0 L100,90 C80,100 60,85 40,95 C20,105 0,90 0,90 Z' fill='black'/></svg>");-webkit-mask-image:url("data:image/svg+xml;utf8,<svg viewBox='0 0 100 100' preserveAspectRatio='none' xmlns='http://www.w3.org/2000/svg'><path d='M0,0 C20,10 40,-5 60,5 C80,15 100,0 100,0 L100,90 C80,100 60,85 40,95 C20,105 0,90 0,90 Z' fill='black'/></svg>");mask-size:100% 100%;-webkit-mask-size:100% 100%}
-.card-hover{transition:transform .25s ease,box-shadow .25s ease}
-.card-hover:hover{transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.1)}
-.nav-chip:hover{background:rgba(255,255,255,0.28) !important}
-.material-symbols-outlined{font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 24}
-</style>
-</head>
-<body class="font-body" style="color:var(--on-surface)">
+// ---- Sort items within each category by date (newest first) ----
+CATEGORIES.forEach(cat => {
+  cat.items.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  cat.latestDate = cat.items[0]?.date || '';
+});
 
-<header class="relative overflow-hidden">
-  <div class="watercolor-wash-header px-6 py-12 md:py-16" style="background:linear-gradient(135deg,#5E6B7F 0%,#7B6B60 100%)">
-    <div class="max-w-4xl mx-auto relative z-10">
-      <div class="flex items-center gap-3 mb-3">
-        <span class="material-symbols-outlined text-white/80" style="font-size:2rem">auto_stories</span>
-        <div>
-          <h1 class="font-headline text-3xl md:text-4xl text-white font-bold italic leading-tight">David 素材展示</h1>
-          <p class="text-white/60 font-label text-sm tracking-[0.15em] uppercase mt-1">Teaching Materials Showcase</p>
-        </div>
-      </div>
-      <p class="text-white/70 font-body text-base max-w-2xl leading-relaxed mt-4 mb-6">實驗中的華德福教學素材——持續增刪更新中</p>
-      <nav class="flex flex-wrap gap-2">
-        ${navItems}
-      </nav>
-    </div>
-  </div>
-  <div class="h-6 bg-gradient-to-b from-[#5E6B7F]/10 to-transparent"></div>
-</header>
+// ---- Sort categories by their most recent upload, newest first ----
+CATEGORIES.sort((a, b) => {
+  const d = (b.latestDate || '').localeCompare(a.latestDate || '');
+  if (d !== 0) return d;
+  return a.folder.localeCompare(b.folder);
+});
 
-<main class="max-w-4xl mx-auto px-4 md:px-8 py-8">
-  <div class="flex items-center justify-between mb-8">
-    <p class="text-sm font-label" style="color:var(--on-surface-variant)">
-      <span class="font-semibold">${totalFiles}</span> 件素材 &middot; <span class="font-semibold">${sections.length}</span> 個分類
-    </p>
-    <p class="text-xs font-label" style="color:var(--outline-variant)">Updated ${now}</p>
-  </div>
-${folderSections}
-</main>
+// ---- Reassign display numerals 01..NN based on new sort order ----
+CATEGORIES.forEach((cat, i) => {
+  cat.num = String(i + 1).padStart(2, '0');
+});
 
-<footer style="background:var(--bg-wash-1)" class="border-t py-8 mt-4">
-  <div class="max-w-4xl mx-auto flex flex-col items-center gap-2 px-6 text-center">
-    <p class="font-headline italic text-lg" style="color:var(--primary)">宜蘭慈心華德福實驗學校</p>
-    <p class="text-xs tracking-widest uppercase" style="color:var(--secondary)">Powered by TeacherOS</p>
-  </div>
-</footer>
-</body>
-</html>`;
+// ---- Update META.updated with the freshest item date across all categories ----
+const _allDates = CATEGORIES.flatMap(c => c.items.map(i => i.date)).filter(Boolean).sort();
+if (_allDates.length) {
+  META.updated = _allDates[_allDates.length - 1];
+}
+
+// Helper: build encoded URL for a file
+function urlFor(category, item) {
+  return BASE_URL + encodeURI(category.folder + '/' + item.file);
+}
+
+// Expose to window
+window.DATA = { META, CATEGORIES, urlFor };
+`;
+  fs.writeFileSync(path.join(OUTPUT_DIR, 'data.js'), out);
+}
+
+function writeBuildReport(report, totalCategories, totalFiles) {
+  const lines = [
+    '# build-index 部署報告',
+    '',
+    `產生於 ${new Date().toISOString()}`,
+    '',
+    `## 摘要`,
+    `- 分類數：${totalCategories}`,
+    `- 同步檔案數：${report.updatedFiles}`,
+    `- 新增（Drive 有、curated 沒）：${report.newFiles.length}`,
+    `- 缺漏（curated 有、Drive 沒）：${report.missingFiles.length}`,
+    `- 未知資料夾（Drive 有、未在 data.js）：${report.unknownFolders.length}`,
+    '',
+  ];
+
+  if (report.newFiles.length) {
+    lines.push('## 🆕 自動加入（請至 site/data.js 補 desc）');
+    report.newFiles.forEach(p => lines.push(`- \`${p}\``));
+    lines.push('');
+  }
+  if (report.missingFiles.length) {
+    lines.push('## ⚠️ 缺漏（curated 有、Drive 沒）');
+    report.missingFiles.forEach(p => lines.push(`- \`${p}\``));
+    lines.push('');
+  }
+  if (report.unknownFolders.length) {
+    lines.push('## 🚫 未知資料夾（須先在 site/data.js 建中繼資料）');
+    report.unknownFolders.forEach(p => lines.push(`- \`${p}\``));
+    lines.push('');
+  }
+
+  fs.writeFileSync(path.join(OUTPUT_DIR, 'build-report.md'), lines.join('\n'));
+}
+
+function copyStaticAssets() {
+  for (const f of ['index.html', 'category.html', 'styles.css']) {
+    fs.copyFileSync(path.join(SITE_DIR, f), path.join(OUTPUT_DIR, f));
+  }
 }
 
 // ─── Main ────────────────────────────────────────────────────
 async function main() {
-  console.log('Connecting to Google Drive...');
-  const drive = await getDriveClient();
-
-  console.log('Listing subfolders...');
-  const subfolders = await listSubfolders(drive, ROOT_FOLDER_ID);
-  console.log(`Found ${subfolders.length} subfolders`);
-
   fs.mkdirSync(FILES_DIR, { recursive: true });
 
-  const sections = [];
+  console.log('📦 載入 site/data.js（curated 中繼資料）...');
+  const curated = loadCuratedData();
+  console.log(`   ${curated.CATEGORIES.length} 個分類, ${curated.CATEGORIES.reduce((s,c) => s+c.items.length, 0)} 件素材`);
 
+  console.log('☁️  連線 Google Drive...');
+  const drive = await getDriveClient();
+
+  console.log('📁 列出子資料夾...');
+  const subfolders = await listSubfolders(drive, ROOT_FOLDER_ID);
+  console.log(`   發現 ${subfolders.length} 個子資料夾`);
+
+  console.log('📋 列出每個資料夾的 HTML 檔案...');
+  const driveData = [];
   for (const folder of subfolders) {
-    const displayName = folderDisplayName(folder.name);
-    const slug = safeFilename(folder.name);
-    const folderDir = path.join(FILES_DIR, slug);
-    fs.mkdirSync(folderDir, { recursive: true });
-
-    console.log(`\n[${folder.name}]`);
     const files = await listHtmlFiles(drive, folder.id);
-    console.log(`  ${files.length} files`);
+    driveData.push({ id: folder.id, name: folder.name, files });
+    console.log(`   [${folder.name}] ${files.length} 檔`);
+  }
 
-    for (const file of files) {
-      const localName = safeFilename(file.name);
-      const destPath = path.join(folderDir, localName);
-      const sizeMB = (parseInt(file.size || '0', 10) / 1024 / 1024).toFixed(1);
-      console.log(`  ↓ ${file.name} (${sizeMB} MB)`);
+  console.log('🔄 合併 curated + Drive...');
+  const { curated: merged, report } = mergeData(curated, driveData);
+
+  console.log('⬇️  下載 HTML 檔案到 output/files/...');
+  for (const f of driveData) {
+    const folderDir = path.join(FILES_DIR, f.name);
+    fs.mkdirSync(folderDir, { recursive: true });
+    for (const file of f.files) {
+      const destPath = path.join(folderDir, file.name);
+      const sizeMB = (parseInt(file.size || '0', 10) / 1024 / 1024).toFixed(2);
+      console.log(`   ↓ ${f.name}/${file.name} (${sizeMB} MB)`);
       await downloadFile(drive, file.id, destPath);
-    }
-
-    if (files.length > 0) {
-      sections.push({ displayName, slug, files });
     }
   }
 
-  const html = generateIndex(sections);
-  fs.writeFileSync(path.join(OUTPUT_DIR, 'index.html'), html);
-  console.log(`\n✓ index.html generated (${sections.length} sections, ${sections.reduce((s,f)=>s+f.files.length,0)} files)`);
+  console.log('📝 產出 output/data.js + 複製靜態檔案...');
+  writeDataJs(merged);
+  copyStaticAssets();
+
+  const totalFiles = merged.CATEGORIES.reduce((s, c) => s + c.items.length, 0);
+  writeBuildReport(report, merged.CATEGORIES.length, totalFiles);
+
+  console.log(`\n✓ Build 完成`);
+  console.log(`   ${merged.CATEGORIES.length} 分類, ${totalFiles} 件素材`);
+  if (report.newFiles.length) console.log(`   🆕 ${report.newFiles.length} 個新檔自動上架（請補 desc）`);
+  if (report.missingFiles.length) console.log(`   ⚠️  ${report.missingFiles.length} 個檔案在 Drive 找不到`);
+  if (report.unknownFolders.length) console.log(`   🚫 ${report.unknownFolders.length} 個未知資料夾被跳過`);
 }
 
 main().catch(err => {
   console.error('build-index failed:', err.message);
+  console.error(err.stack);
   process.exit(1);
 });

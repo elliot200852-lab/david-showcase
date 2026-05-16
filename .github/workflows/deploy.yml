@@ -1,9 +1,16 @@
 name: Build & Deploy to GitHub Pages
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'scripts/**'
+      - 'package.json'
+      - '.github/workflows/deploy.yml'
   schedule:
     - cron: '17 6 * * *'  # 14:17 Taiwan time (UTC+8 = 06:17 UTC)
-  workflow_dispatch:       # Manual trigger + cross-repo trigger
+  workflow_dispatch:       # Manual trigger + 由 deploy-showcase skill 觸發
 
 permissions:
   contents: read

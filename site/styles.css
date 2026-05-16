@@ -1,0 +1,145 @@
+/* ============================================================
+   David 素材展示 · shared tokens
+   Derived from Teaching Core Design System (Ci-Xin Waldorf)
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700;900&family=EB+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=Allura&display=swap');
+
+:root {
+  /* ink */
+  --ink:            #1a1a1a;
+  --ink-2:          #4a4a4a;
+  --ink-muted:      #6a6a6a;
+  --ink-faint:      #8a7a5a;
+
+  /* paper */
+  --paper:          #fdfcf7;
+  --paper-2:        #f6f0e4;
+  --paper-3:        #ece2cf;
+  --paper-aged:     #f4ecd8;
+
+  /* rule */
+  --rule:           #d4c4b0;
+  --rule-2:         #b8a28a;
+  --accent:         #7a4b2a;
+  --earth-brown:    #6a4a2a;
+
+  /* atmosphere */
+  --chalkboard:     #1f2a24;
+  --chalkboard-2:   #2d3a33;
+  --chalk:          #f2ece0;
+  --chalk-muted:    #c8c0b0;
+  --chalk-faint:    #9a9282;
+
+  /* category accent palette (postage-stamp colors) */
+  --watercolor-blue:  #3a5a7a;
+  --watercolor-rust:  #b0603a;
+  --watercolor-sage:  #6a8a5a;
+  --watercolor-teal:  #5a7a6a;
+  --watercolor-ochre: #d89a4a;
+  --drape-ochre:      #c89a4a;
+  --fern-green:       #5a6a3a;
+  --plaster-pink-3:   #d49b89;
+  --pencil-mint:      #b8d0b4;
+  --pencil-rose:      #d68aa0;
+  --pencil-shadow:    #b8a898;
+  --sumi-ink:         #2a2420;
+
+  /* type */
+  --font-serif: "Noto Serif TC", "Source Han Serif TC", "PingFang TC", serif;
+  --font-sans:  "Noto Sans TC",  "Source Han Sans TC",  "PingFang TC", sans-serif;
+  --font-latin-italic: "Allura", "EB Garamond", serif;
+  --font-latin-book:   "EB Garamond", "Noto Serif TC", serif;
+
+  /* sizes (px, for screen reading; pt for print docs) */
+  --fs-display: 64px;
+  --fs-h1:      40px;
+  --fs-h2:      24px;
+  --fs-h3:      17px;
+  --fs-body:    15.5px;
+  --fs-small:   13.5px;
+  --fs-caption: 12.5px;
+  --fs-eyebrow: 11.5px;
+
+  --lh-tight: 1.25;
+  --lh-snug:  1.45;
+  --lh-body:  1.7;
+  --lh-read:  1.85;
+
+  --ls-tight:   0.02em;
+  --ls-default: 0.03em;
+  --ls-wide:    0.06em;
+  --ls-wider:   0.1em;
+  --ls-caps:    0.14em;
+  --ls-kicker:  0.3em;
+
+  /* spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+  --sp-9: 48px;
+  --sp-10: 56px;
+  --sp-11: 64px;
+  --sp-12: 72px;
+  --sp-13: 80px;
+  --sp-14: 96px;
+  --sp-15: 120px;
+
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-3: 8px;
+}
+
+/* ---- reset ---- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-serif);
+  color: var(--ink);
+  background: var(--paper);
+  font-size: var(--fs-body);
+  line-height: var(--lh-read);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a { color: inherit; text-decoration: none; }
+button { font: inherit; cursor: pointer; }
+img, svg { display: block; max-width: 100%; }
+
+/* ---- shared utilities ---- */
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: var(--ls-kicker);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.italic-latin {
+  font-family: var(--font-latin-italic);
+  font-style: italic;
+  font-weight: 400;
+}
+.italic-book {
+  font-family: var(--font-latin-book);
+  font-style: italic;
+  font-weight: 400;
+}
+.rule-short {
+  width: 48px;
+  height: 1px;
+  background: var(--rule-2);
+  border: none;
+  margin: var(--sp-7) 0;
+}
+.rule-mid {
+  width: 64px;
+  height: 1px;
+  background: var(--rule-2);
+  border: none;
+  margin: var(--sp-7) 0;
+}
