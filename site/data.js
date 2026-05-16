@@ -51,7 +51,7 @@ const CATEGORIES = [
         file: '9C春季英文期末三堂課企劃.html' },
       { title: 'The House on Mango Street · 青春、愛情與女性自主', date: '2026-03-19', size: '7.4 MB',
         desc: '以三個主題切入芒果街的短篇。',
-        file: 'The-House-on-Mango-Street-—-青春、愛情與女性自主.html' },
+        file: 'The House on Mango Street — 青春、愛情與女性自主.html' },
     ],
   },
   {
@@ -196,7 +196,7 @@ const CATEGORIES = [
     items: [
       { title: '戶外教學申請表 · 網頁填寫版', date: '2026-04-11', size: '38 KB',
         desc: '戶外教學行政申請表的網頁化版本。',
-        file: '戶外教學申請表網頁填寫版-V3.html' },
+        file: '戶外教學申請表網頁填寫版 V3.html' },
     ],
   },
   {
