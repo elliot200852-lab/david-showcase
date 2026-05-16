@@ -263,6 +263,11 @@ function writeBuildReport(report, totalCategories, totalFiles) {
     report.unknownFolders.forEach(p => lines.push(`- \`${p}\``));
     lines.push('');
   }
+  if (report.linkRewrites && report.linkRewrites.length) {
+    lines.push('## 🔗 連結改寫（依 site/link-rewrites.json）');
+    report.linkRewrites.forEach(p => lines.push(`- ${p}`));
+    lines.push('');
+  }
 
   fs.writeFileSync(path.join(OUTPUT_DIR, 'build-report.md'), lines.join('\n'));
 }
@@ -271,6 +276,68 @@ function copyStaticAssets() {
   for (const f of ['index.html', 'category.html', 'styles.css']) {
     fs.copyFileSync(path.join(SITE_DIR, f), path.join(OUTPUT_DIR, f));
   }
+}
+
+// ─── Per-folder href rewrites ───────────────────────────────
+// 修正 Drive 上傳的 HTML 內、指向不存在 sibling 檔的 href（例如
+// pandoc 從 .md 轉 HTML 時把章節間 prev/next 留作 .md 兄弟檔，但 deploy
+// 下只有 .html）。對照表見 site/link-rewrites.json。
+function loadLinkRewrites() {
+  const p = path.join(SITE_DIR, 'link-rewrites.json');
+  if (!fs.existsSync(p)) return {};
+  const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+  delete raw._doc;
+  return raw;
+}
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function rewriteLinks(content, rewrites) {
+  let modified = content;
+  let count = 0;
+  for (const [from, to] of Object.entries(rewrites)) {
+    // encodeURI preserves `&`; some tools URL-encode it to `%26`, others emit
+    // the HTML entity `&amp;`. Try all three so we hit every dialect pandoc
+    // and friends produce.
+    const enc = encodeURI(from);
+    const variants = new Set([
+      from,
+      enc,
+      enc.replace(/&/g, '%26'),
+      from.replace(/&/g, '&amp;'),
+      enc.replace(/&/g, '&amp;'),
+    ]);
+    for (const v of variants) {
+      const re = new RegExp(`href="${escapeRegex(v)}(#[^"]*)?"`, 'g');
+      modified = modified.replace(re, (_m, frag) => {
+        count++;
+        return `href="${to}${frag || ''}"`;
+      });
+    }
+  }
+  return { content: modified, count };
+}
+
+function applyLinkRewritesPerFolder(folderName, folderDir, linkRewrites) {
+  const rules = linkRewrites[folderName];
+  if (!rules) return { filesChanged: 0, totalLinks: 0, perFile: [] };
+  let filesChanged = 0, totalLinks = 0;
+  const perFile = [];
+  for (const fname of fs.readdirSync(folderDir)) {
+    if (!fname.toLowerCase().endsWith('.html')) continue;
+    const fp = path.join(folderDir, fname);
+    const orig = fs.readFileSync(fp, 'utf8');
+    const { content: fixed, count } = rewriteLinks(orig, rules);
+    if (count > 0) {
+      fs.writeFileSync(fp, fixed);
+      filesChanged++;
+      totalLinks += count;
+      perFile.push(`${folderName}/${fname}: ${count} link(s)`);
+    }
+  }
+  return { filesChanged, totalLinks, perFile };
 }
 
 // ─── Main ────────────────────────────────────────────────────
@@ -311,15 +378,32 @@ async function main() {
     }
   }
 
+  console.log('🔗 套用 link-rewrites（修正 pandoc 殘留的 .md 兄弟檔連結）...');
+  const linkRewrites = loadLinkRewrites();
+  const rewriteSummary = [];
+  for (const f of driveData) {
+    const folderDir = path.join(FILES_DIR, f.name);
+    const r = applyLinkRewritesPerFolder(f.name, folderDir, linkRewrites);
+    if (r.totalLinks > 0) {
+      console.log(`   ✎ ${f.name}: 改寫 ${r.filesChanged} 檔 / ${r.totalLinks} 連結`);
+      rewriteSummary.push(...r.perFile);
+    }
+  }
+  if (rewriteSummary.length === 0) {
+    console.log('   (無連結需要改寫)');
+  }
+
   console.log('📝 產出 output/data.js + 複製靜態檔案...');
   writeDataJs(merged);
   copyStaticAssets();
 
   const totalFiles = merged.CATEGORIES.reduce((s, c) => s + c.items.length, 0);
+  report.linkRewrites = rewriteSummary;
   writeBuildReport(report, merged.CATEGORIES.length, totalFiles);
 
   console.log(`\n✓ Build 完成`);
   console.log(`   ${merged.CATEGORIES.length} 分類, ${totalFiles} 件素材`);
+  if (rewriteSummary.length) console.log(`   🔗 link-rewrites: ${rewriteSummary.length} 檔被改寫`);
   if (report.newFiles.length) console.log(`   🆕 ${report.newFiles.length} 個新檔自動上架（請補 desc）`);
   if (report.missingFiles.length) console.log(`   ⚠️  ${report.missingFiles.length} 個檔案在 Drive 找不到`);
   if (report.unknownFolders.length) console.log(`   🚫 ${report.unknownFolders.length} 個未知資料夾被跳過`);

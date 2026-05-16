@@ -1,0 +1,25 @@
+{
+  "_doc": "Per-folder href rewrites applied by scripts/build-index.js after download. Each key is the literal href text (URL-decoded) inside the source HTML; the value is the replacement href relative to the same folder. The build applies the rewrite for both the raw and percent-encoded forms, and preserves any #anchor suffix. Add new mappings here when new broken links appear after a Drive re-upload.",
+  "11_雷蒙30-ClaudeCode迷你課": {
+    "1-1 開始安裝配置你的 Claude Code.md": "01-1_安裝Claude_Code.html",
+    "1-2 GitHub 與 Git 入門.md": "01-2_GitHub_Git入門.html",
+    "1-3 怎麼跟 Claude-Code 提問／協作最有效？.md": "01-3_提問與協作.html",
+    "2-1 讓 AI 記住你的偏好.md": "02-1_AI記住偏好.html",
+    "2-2 Claude Code 完整架構速覽.md": "02-2_完整架構速覽.html",
+    "2-3 用 AI 管理你的筆記和每日反思.md": "02-3_AI管理筆記.html",
+    "2-4 AI 分身資料夾結構:雷小蒙拆解.md": "02-4_AI分身資料夾.html",
+    "2-4 AI 分身資料夾結構：雷小蒙拆解.md": "02-4_AI分身資料夾.html",
+    "3-1 用 Plan Mode 讓 AI 先想清楚再動手.md": "03-1_Plan_Mode.html",
+    "3-2 擁有一份 DESIGN.md 品牌社群圖卡 & 簡報自動生成.md": "03-2_DESIGN_md.html",
+    "3-2 建立 DESIGN.md 品牌說明書(社群圖卡 & 簡報自動生成).md": "03-2_DESIGN_md.html",
+    "3-2 建立 DESIGN.md 品牌說明書（社群圖卡 & 簡報自動生成）.md": "03-2_DESIGN_md.html",
+    "3-3 把每日反思變成自動化 Skill.md": "03-3_反思自動化Skill.html",
+    "3-4 日本旅行 AI 拍照收據自動記帳.md": "03-4_拍照記帳.html",
+    "3-5 做一個自己的品牌 Landing Page.md": "03-5_LandingPage.html",
+    "../pro-kit/01-agent-folder-setup.md": "PK-01_AI分身起始助手.html",
+    "../pro-kit/07-cross-device-sync.md": "PK-07_跨裝置同步.html",
+    "../docs/2-1 讓 AI 記住你的偏好.md": "02-1_AI記住偏好.html",
+    "../README.md": "_INDEX_雷蒙30總覽.html",
+    "01-agent-folder-setup.md": "PK-01_AI分身起始助手.html"
+  }
+}
